@@ -17,33 +17,45 @@
  */
 package org.apache.beam.sdk.io;
 
+import static org.apache.beam.sdk.io.BigQueryIO.fromJsonString;
+import static org.apache.beam.sdk.io.BigQueryIO.toJsonString;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
 
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.coders.CoderException;
 import org.apache.beam.sdk.coders.TableRowJsonCoder;
+import org.apache.beam.sdk.io.BigQueryIO.Status;
 import org.apache.beam.sdk.io.BigQueryIO.Write.CreateDisposition;
 import org.apache.beam.sdk.io.BigQueryIO.Write.WriteDisposition;
 import org.apache.beam.sdk.options.BigQueryOptions;
 import org.apache.beam.sdk.options.PipelineOptionsFactory;
 import org.apache.beam.sdk.testing.ExpectedLogs;
+import org.apache.beam.sdk.testing.PAssert;
 import org.apache.beam.sdk.testing.RunnableOnService;
 import org.apache.beam.sdk.testing.TestPipeline;
 import org.apache.beam.sdk.transforms.Create;
+import org.apache.beam.sdk.transforms.DoFn;
+import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.transforms.SerializableFunction;
 import org.apache.beam.sdk.transforms.windowing.BoundedWindow;
 import org.apache.beam.sdk.util.BigQueryServices;
-import org.apache.beam.sdk.util.BigQueryServices.Status;
 import org.apache.beam.sdk.util.CoderUtils;
+import org.apache.beam.sdk.values.PCollection;
 
 import com.google.api.client.util.Data;
+import com.google.api.services.bigquery.model.ErrorProto;
+import com.google.api.services.bigquery.model.Job;
+import com.google.api.services.bigquery.model.JobConfigurationExtract;
 import com.google.api.services.bigquery.model.JobConfigurationLoad;
+import com.google.api.services.bigquery.model.JobConfigurationQuery;
+import com.google.api.services.bigquery.model.JobStatus;
 import com.google.api.services.bigquery.model.TableFieldSchema;
 import com.google.api.services.bigquery.model.TableReference;
 import com.google.api.services.bigquery.model.TableRow;
 import com.google.api.services.bigquery.model.TableSchema;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 
 import org.hamcrest.Matchers;
 import org.junit.Assert;
@@ -61,52 +73,84 @@ import org.mockito.MockitoAnnotations;
 import java.io.File;
 import java.io.FileFilter;
 import java.io.IOException;
+import java.io.Serializable;
+import java.util.Map;
+import java.util.NoSuchElementException;
+
+import javax.annotation.Nullable;
 
 /**
  * Tests for BigQueryIO.
  */
 @RunWith(JUnit4.class)
-public class BigQueryIOTest {
+public class BigQueryIOTest implements Serializable {
+
+  // Status.UNKNOWN maps to null
+  private static final Map<Status, Job> JOB_STATUS_MAP = ImmutableMap.of(
+      Status.SUCCEEDED, new Job().setStatus(new JobStatus()),
+      Status.FAILED, new Job().setStatus(new JobStatus().setErrorResult(new ErrorProto())));
 
   private static class FakeBigQueryServices implements BigQueryServices {
 
-    private Object[] startLoadJobReturns;
+    private Object[] startJobReturns;
     private Object[] pollJobStatusReturns;
+    private String[] jsonTableRowReturns;
 
     /**
-     * Sets the return values for the mock {@link LoadService#startLoadJob}.
+     * Sets the return values for the mock {@link JobService#startLoadJob}.
      *
      * <p>Throws if the {@link Object} is a {@link Exception}, returns otherwise.
      */
-    private FakeBigQueryServices startLoadJobReturns(Object... startLoadJobReturns) {
-      this.startLoadJobReturns = startLoadJobReturns;
+    public FakeBigQueryServices startJobReturns(Object... startJobReturns) {
+      this.startJobReturns = startJobReturns;
       return this;
     }
 
     /**
-     * Sets the return values for the mock {@link LoadService#pollJobStatus}.
+     * Sets the return values for the mock {@link JobService#pollJobStatus}.
      *
      * <p>Throws if the {@link Object} is a {@link Exception}, returns otherwise.
      */
-    private FakeBigQueryServices pollJobStatusReturns(Object... pollJobStatusReturns) {
+    public FakeBigQueryServices pollJobStatusReturns(Object... pollJobStatusReturns) {
       this.pollJobStatusReturns = pollJobStatusReturns;
       return this;
     }
 
-    @Override
-    public LoadService getLoadService(BigQueryOptions bqOptions) {
-      return new FakeLoadService(startLoadJobReturns, pollJobStatusReturns);
+    public FakeBigQueryServices readerReturns(String... jsonTableRowReturns) {
+      this.jsonTableRowReturns = jsonTableRowReturns;
+      return this;
     }
 
-    private static class FakeLoadService implements BigQueryServices.LoadService {
+    @Override
+    public JobService getJobService(BigQueryOptions bqOptions) {
+      return new FakeJobService(startJobReturns, pollJobStatusReturns);
+    }
 
-      private Object[] startLoadJobReturns;
+    @Override
+    public TableService getTableService(BigQueryOptions bqOptions) {
+      throw new UnsupportedOperationException("Not expected to call getTableService().");
+    }
+
+    @Override
+    public Reader getReaderFromTable(BigQueryOptions bqOptions, TableReference tableRef) {
+      return new FakeBigQueryReader(jsonTableRowReturns);
+    }
+
+    @Override
+    public Reader getReaderFromQuery(
+        BigQueryOptions bqOptions, String query, String projectId, @Nullable Boolean flatten) {
+      return new FakeBigQueryReader(jsonTableRowReturns);
+    }
+
+    private static class FakeJobService implements JobService {
+
+      private Object[] startJobReturns;
       private Object[] pollJobStatusReturns;
       private int startLoadJobCallsCount;
       private int pollJobStatusCallsCount;
 
-      public FakeLoadService(Object[] startLoadJobReturns, Object[] pollJobStatusReturns) {
-        this.startLoadJobReturns = startLoadJobReturns;
+      public FakeJobService(Object[] startJobReturns, Object[] pollJobStatusReturns) {
+        this.startJobReturns = startJobReturns;
         this.pollJobStatusReturns = pollJobStatusReturns;
         this.startLoadJobCallsCount = 0;
         this.pollJobStatusCallsCount = 0;
@@ -115,27 +159,28 @@ public class BigQueryIOTest {
       @Override
       public void startLoadJob(String jobId, JobConfigurationLoad loadConfig)
           throws InterruptedException, IOException {
-        if (startLoadJobCallsCount < startLoadJobReturns.length) {
-          Object ret = startLoadJobReturns[startLoadJobCallsCount++];
-          if (ret instanceof IOException) {
-            throw (IOException) ret;
-          } else if (ret instanceof InterruptedException) {
-            throw (InterruptedException) ret;
-          } else {
-            return;
-          }
-        } else {
-          throw new RuntimeException(
-              "Exceeded expected number of calls: " + startLoadJobReturns.length);
-        }
+        startJob();
       }
 
       @Override
-      public Status pollJobStatus(String projectId, String jobId) throws InterruptedException {
+      public void startExtractJob(String jobId, JobConfigurationExtract extractConfig)
+          throws InterruptedException, IOException {
+        startJob();
+      }
+
+      @Override
+      public void startQueryJob(String jobId, JobConfigurationQuery query)
+          throws IOException, InterruptedException {
+        startJob();
+      }
+
+      @Override
+      public Job pollJobStatus(String projectId, String jobId, int maxAttempts)
+          throws InterruptedException {
         if (pollJobStatusCallsCount < pollJobStatusReturns.length) {
           Object ret = pollJobStatusReturns[pollJobStatusCallsCount++];
           if (ret instanceof Status) {
-            return (Status) ret;
+            return JOB_STATUS_MAP.get(ret);
           } else if (ret instanceof InterruptedException) {
             throw (InterruptedException) ret;
           } else {
@@ -146,18 +191,69 @@ public class BigQueryIOTest {
               "Exceeded expected number of calls: " + pollJobStatusReturns.length);
         }
       }
+
+      private void startJob() throws IOException, InterruptedException {
+        if (startLoadJobCallsCount < startJobReturns.length) {
+          Object ret = startJobReturns[startLoadJobCallsCount++];
+          if (ret instanceof IOException) {
+            throw (IOException) ret;
+          } else if (ret instanceof InterruptedException) {
+            throw (InterruptedException) ret;
+          } else {
+            return;
+          }
+        } else {
+          throw new RuntimeException(
+              "Exceeded expected number of calls: " + startJobReturns.length);
+        }
+      }
+    }
+
+    private static class FakeBigQueryReader implements Reader {
+      private static final int UNSTARTED = -1;
+      private static final int CLOSED = Integer.MAX_VALUE;
+
+      private String[] jsonTableRowReturns;
+      private int currIndex;
+
+      FakeBigQueryReader(String[] jsonTableRowReturns) {
+        this.jsonTableRowReturns = jsonTableRowReturns;
+        this.currIndex = UNSTARTED;
+      }
+
+      @Override
+      public boolean start() throws IOException {
+        assertEquals(UNSTARTED, currIndex);
+        currIndex = 0;
+        return currIndex < jsonTableRowReturns.length;
+      }
+
+      @Override
+      public boolean advance() throws IOException {
+        return ++currIndex < jsonTableRowReturns.length;
+      }
+
+      @Override
+      public TableRow getCurrent() throws NoSuchElementException {
+        if (currIndex >= jsonTableRowReturns.length) {
+          throw new NoSuchElementException();
+        }
+        return fromJsonString(jsonTableRowReturns[currIndex], TableRow.class);
+      }
+
+      @Override
+      public void close() throws IOException {
+        currIndex = CLOSED;
+      }
     }
   }
 
-  @Rule
-  public ExpectedException thrown = ExpectedException.none();
-  @Rule public ExpectedLogs logged = ExpectedLogs.none(BigQueryIO.class);
-  @Rule
-  public TemporaryFolder testFolder = new TemporaryFolder();
-  @Mock
-  public BigQueryServices.LoadService mockBqLoadService;
+  @Rule public transient ExpectedException thrown = ExpectedException.none();
+  @Rule public transient ExpectedLogs logged = ExpectedLogs.none(BigQueryIO.class);
+  @Rule public transient TemporaryFolder testFolder = new TemporaryFolder();
+  @Mock public transient BigQueryServices.JobService mockBqLoadService;
 
-  private BigQueryOptions bqOptions;
+  private transient BigQueryOptions bqOptions;
 
   private void checkReadTableObject(
       BigQueryIO.Read.Bound bound, String project, String dataset, String table) {
@@ -171,16 +267,16 @@ public class BigQueryIOTest {
 
   private void checkReadTableObjectWithValidate(
       BigQueryIO.Read.Bound bound, String project, String dataset, String table, boolean validate) {
-    assertEquals(project, bound.table.getProjectId());
-    assertEquals(dataset, bound.table.getDatasetId());
-    assertEquals(table, bound.table.getTableId());
+    assertEquals(project, bound.getTable().getProjectId());
+    assertEquals(dataset, bound.getTable().getDatasetId());
+    assertEquals(table, bound.getTable().getTableId());
     assertNull(bound.query);
     assertEquals(validate, bound.getValidate());
   }
 
   private void checkReadQueryObjectWithValidate(
       BigQueryIO.Read.Bound bound, String query, boolean validate) {
-    assertNull(bound.table);
+    assertNull(bound.getTable());
     assertEquals(query, bound.query);
     assertEquals(validate, bound.getValidate());
   }
@@ -281,11 +377,7 @@ public class BigQueryIOTest {
     thrown.expectMessage(
         Matchers.either(Matchers.containsString("Unable to confirm BigQuery dataset presence"))
             .or(Matchers.containsString("BigQuery dataset not found for table")));
-    try {
-      p.apply(BigQueryIO.Read.named("ReadMyTable").from(tableRef));
-    } finally {
-      Assert.assertEquals("someproject", tableRef.getProjectId());
-    }
+    p.apply(BigQueryIO.Read.named("ReadMyTable").from(tableRef));
   }
 
   @Test
@@ -330,9 +422,36 @@ public class BigQueryIOTest {
   }
 
   @Test
+  public void testCustomSource() {
+    FakeBigQueryServices fakeBqServices = new FakeBigQueryServices()
+        .startJobReturns("done", "done")
+        .readerReturns(
+            toJsonString(new TableRow().set("name", "a").set("number", 1)),
+            toJsonString(new TableRow().set("name", "b").set("number", 2)),
+            toJsonString(new TableRow().set("name", "c").set("number", 3)));
+
+    Pipeline p = TestPipeline.create(bqOptions);
+    PCollection<String> output = p
+        .apply(BigQueryIO.Read.from("foo.com:project:somedataset.sometable")
+            .withTestServices(fakeBqServices)
+            .withoutValidation())
+        .apply(ParDo.of(new DoFn<TableRow, String>() {
+          @Override
+          public void processElement(ProcessContext c) throws Exception {
+            c.output((String) c.element().get("name"));
+          }
+        }));
+
+    PAssert.that(output)
+        .containsInAnyOrder(ImmutableList.of("a", "b", "c"));
+
+    p.run();
+  }
+
+  @Test
   public void testCustomSink() throws Exception {
     FakeBigQueryServices fakeBqServices = new FakeBigQueryServices()
-        .startLoadJobReturns("done", "done", "done")
+        .startJobReturns("done", "done", "done")
         .pollJobStatusReturns(Status.FAILED, Status.FAILED, Status.SUCCEEDED);
 
     Pipeline p = TestPipeline.create(bqOptions);
@@ -364,7 +483,7 @@ public class BigQueryIOTest {
   @Test
   public void testCustomSinkUnknown() throws Exception {
     FakeBigQueryServices fakeBqServices = new FakeBigQueryServices()
-        .startLoadJobReturns("done", "done")
+        .startJobReturns("done", "done")
         .pollJobStatusReturns(Status.FAILED, Status.UNKNOWN);
 
     Pipeline p = TestPipeline.create(bqOptions);
