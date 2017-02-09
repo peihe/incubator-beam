@@ -26,6 +26,7 @@ import java.util.ServiceLoader;
 import org.apache.beam.sdk.io.FileSystemRegistrar;
 import org.apache.beam.sdk.io.FileSystems;
 import org.apache.beam.sdk.options.PipelineOptionsFactory;
+import org.apache.hadoop.fs.Path;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -48,5 +49,17 @@ public class HadoopFileSystemRegistrarTest {
       }
     }
     fail("Expected to find " + HadoopFileSystemRegistrar.class);
+  }
+
+  @Test
+  public void testPath() throws Exception {
+    Path path = new Path("/dir/temp/");
+    System.out.println(path);
+    System.out.println(new Path(path, "output/"));
+    System.out.println(new Path(path, "output"));
+
+    System.out.println(path.toUri());
+    System.out.println(new Path(path, "output/").toUri());
+    System.out.println(new Path(path, "output").toUri());
   }
 }

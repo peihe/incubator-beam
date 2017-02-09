@@ -18,6 +18,8 @@
 package org.apache.beam.sdk.io.hdfs;
 
 import com.google.auto.service.AutoService;
+import com.google.common.base.Throwables;
+import java.io.IOException;
 import javax.annotation.Nonnull;
 import org.apache.beam.sdk.io.FileSystem;
 import org.apache.beam.sdk.io.FileSystemRegistrar;
@@ -32,7 +34,7 @@ public class HadoopFileSystemRegistrar implements FileSystemRegistrar {
 
   @Override
   public FileSystem fromOptions(@Nonnull PipelineOptions options) {
-    return new HadoopFileSystem();
+    return new HadoopFileSystem(null);
   }
 
   @Override
