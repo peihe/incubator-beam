@@ -238,6 +238,10 @@ public class GcsUtil {
     return results;
   }
 
+  public static boolean isGlob(GcsPath spec) {
+    return GLOB_PREFIX.matcher(spec.getObject()).matches();
+  }
+
   @VisibleForTesting
   @Nullable
   Integer getUploadBufferSizeBytes() {
@@ -494,7 +498,7 @@ public class GcsUtil {
     }
   }
 
-  private static void executeBatches(List<BatchRequest> batches) throws IOException {
+  public static void executeBatches(List<BatchRequest> batches) throws IOException {
     ListeningExecutorService executor = MoreExecutors.listeningDecorator(
         MoreExecutors.getExitingExecutorService(
             new ThreadPoolExecutor(MAX_CONCURRENT_BATCHES, MAX_CONCURRENT_BATCHES,
@@ -534,8 +538,7 @@ public class GcsUtil {
    * @return {@link BatchRequest BatchRequests} to execute.
    * @throws IOException
    */
-  @VisibleForTesting
-  List<BatchRequest> makeGetBatches(
+  public List<BatchRequest> makeGetBatches(
       Collection<GcsPath> paths,
       List<StorageObject[]> results) throws IOException {
     List<BatchRequest> batches = new LinkedList<>();
@@ -664,7 +667,10 @@ public class GcsUtil {
     });
   }
 
-  private BatchRequest createBatchRequest() {
+  /**
+   * Create a {@link BatchRequest}.
+   */
+  public BatchRequest createBatchRequest() {
     return storageClient.batch(httpRequestInitializer);
   }
 

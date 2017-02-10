@@ -24,6 +24,7 @@ import java.nio.channels.WritableByteChannel;
 import java.util.Collection;
 import java.util.List;
 import org.apache.beam.sdk.io.fs.CreateOptions;
+import org.apache.beam.sdk.io.fs.MatchResult;
 import org.apache.beam.sdk.io.fs.ResourceId;
 
 /**
@@ -35,7 +36,6 @@ import org.apache.beam.sdk.io.fs.ResourceId;
  * Clients should use {@link FileSystems} utility.
  */
 public abstract class FileSystem<ResourceIdT extends ResourceId> {
-
   /**
    * Returns a write channel for the given {@link ResourceIdT}.
    *
@@ -109,4 +109,30 @@ public abstract class FileSystem<ResourceIdT extends ResourceId> {
    * to determine the state of the resources.
    */
   protected abstract void delete(Collection<ResourceIdT> resourceIds) throws IOException;
+
+  /**
+   * This is the entry point to convert users provided specs to URIs.
+   * Callers should use match() to resolve users specs ambiguities before
+   * calling other methods.
+   *
+   * @return List<MatchResult>, which is in the same order of the input specs.
+   *
+   * @throw IOException if all specs failed to match due to issues like:
+   * network connection, authorization.
+   * Exception for individual spec need to be deferred until callers retrieve
+   * metadata with {@link MatchResult#metadata()}.
+   *
+   *
+   * Implementation should handle the following ambiguities of users provided sepc:
+   * 1). spec could be a glob or a uri. match() should be able to tell and
+   *     choose efficient implementations.
+   * 2). spec doesn’t end with ‘/’ may refer to files or directories:
+   *     file:/home/dir/ should be returned for spec “file:/home/dir”.
+   *     (However, spec ends with ‘/’ always refers to directories.)
+   * Note: File systems glob support is different. However, it is required to
+   * support glob in the final component of a path (eg file:/foo/bar/*.txt).
+   *
+   * Throws if the spec is invalid.
+   */
+  protected abstract List<MatchResult> match(List<String> specs) throws IOException;
 }
