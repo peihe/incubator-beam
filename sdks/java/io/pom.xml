@@ -43,6 +43,7 @@
     <module>amqp</module>
     <module>cassandra</module>
     <module>common</module>
+    <module>alibaba-internal</module>
     <module>elasticsearch</module>
     <module>google-cloud-platform</module>
     <module>hadoop-common</module>
