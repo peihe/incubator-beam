@@ -1423,7 +1423,8 @@ public class ReduceFnRunnerTest {
                              .withTrigger(Repeatedly.<GlobalWindow>forever(
                                  AfterProcessingTime.pastFirstElementInPane().plusDelayOf(
                                      new Duration(3))))
-                             .withMode(AccumulationMode.DISCARDING_FIRED_PANES));
+                             .withMode(AccumulationMode.DISCARDING_FIRED_PANES)
+                             .withClosingBehavior(ClosingBehavior.FIRE_ALWAYS));
 
     final int n = 20;
     for (int i = 0; i < n; i++) {

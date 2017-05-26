@@ -963,6 +963,10 @@ public class ReduceFnRunner<K, InputT, OutputT, W extends BoundedWindow> {
     @Nullable Instant newHold = pair.newHold;
 
     final boolean isEmpty = nonEmptyPanes.isEmpty(renamedContext.state()).read();
+    if (isFinished && isEmpty
+        && windowingStrategy.getClosingBehavior() == ClosingBehavior.FIRE_IF_NON_EMPTY) {
+      return newHold;
+    }
 
     if (newHold != null) {
       // We can't be finished yet.
