@@ -25,4 +25,8 @@ public class CommonInstance {
   public static final String VALUE = "Value";
 
   public static final String BEAM_WATERMARK_STREAM_ID = "BEAM_WATERMARK";
+
+  public static final String BEAM_SOURCE_WATERMARK_METRICS = "beam_source_watermark";
+  public static final String BEAM_INPUT_WATERMARK_METRICS = "beam_input_watermark";
+  public static final String BEAM_OUTPUT_WATERMARK_METRICS = "beam_output_watermark";
 }
