@@ -23,6 +23,7 @@ import backtype.storm.Config;
 import backtype.storm.LocalCluster;
 import com.alibaba.jstorm.utils.JStormUtils;
 import java.io.IOException;
+import org.apache.beam.runners.jstorm.translation.JStormMetricsResults;
 import org.apache.beam.sdk.PipelineResult;
 import org.apache.beam.sdk.metrics.MetricResults;
 import org.joda.time.Duration;
@@ -74,6 +75,7 @@ public abstract class JStormRunnerResult implements PipelineResult {
         long localModeExecuteTimeSecs) {
       super(topologyName, config);
       this.localCluster = checkNotNull(localCluster, "localCluster");
+      this.localModeExecuteTimeSecs = localModeExecuteTimeSecs;
     }
 
     @Override
@@ -87,11 +89,7 @@ public abstract class JStormRunnerResult implements PipelineResult {
     @Override
     public State waitUntilFinish(Duration duration) {
       JStormUtils.sleepMs(duration.getMillis());
-      try {
-        return cancel();
-      } catch (IOException e) {
-        throw new RuntimeException(e);
-      }
+      return State.RUNNING;
     }
 
     @Override
@@ -101,7 +99,7 @@ public abstract class JStormRunnerResult implements PipelineResult {
 
     @Override
     public MetricResults metrics() {
-      throw new UnsupportedOperationException("This method is not yet supported.");
+      return new JStormMetricsResults();
     }
   }
 }
